@@ -10,7 +10,6 @@ services:
     build: ./mysql
     volumes:
       - ./data_volume:/var/lib/mysql
-      - ./my.cnf:/etc/my.cnf      
     environment: 
       MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
       MYSQL_DATABASE: "jambones"
@@ -39,9 +38,9 @@ services:
       - ./data/influxdb:/var/lib/influxdb
     environment:
         DOCKER_INFLUXDB_INIT_MODE: setup
-        DOCKER_INFLUXDB_INIT_USERNAME: kore
-        DOCKER_INFLUXDB_INIT_PASSWORD: Kore@123
-        DOCKER_INFLUXDB_INIT_ORG: kore.com
+        DOCKER_INFLUXDB_INIT_USERNAME: jambonz
+        DOCKER_INFLUXDB_INIT_PASSWORD: jambonz@123
+        DOCKER_INFLUXDB_INIT_ORG: jambonz.org
         DOCKER_INFLUXDB_INIT_BUCKET: telegraf
         DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: "QxYy-uwafmy3KgCigYmKFHV5uUz5g7STx79yV7O4qnx-aFk4VYlUCmCmucivKNFK2uHZhSwm0_egabljs78FiA=="
     ports:
@@ -53,7 +52,7 @@ services:
   telegraf:
     image: telegraf:latest
     volumes:
-    - ./telegraf.conf:/etc/telegraf/telegraf.conf
+    - ./telegraf:/etc/telegraf
     ports:
       - "8125:8125/tcp" 
       - "8125:8125/udp" 
@@ -86,7 +85,7 @@ services:
         ipv4_address: 172.10.0.90
 
   rtpengine:
-    image: drachtio/rtpengine:latest
+    image: drachtio/rtpengine:jambonz-test
     restart: always
     command: rtpengine --interface private/172.10.0.91 --interface public/172.10.0.91!${HOST_IP} --log-level 1
     ports:
@@ -100,6 +99,8 @@ services:
   api-server:
     image: jambonz/api-server:latest
     restart: always
+    ports:
+      - "3000:3000"  
     environment:
       NODE_ENV: production
       JAMBONES_MYSQL_HOST: 172.10.0.9
@@ -129,6 +130,8 @@ services:
     networks:
       jambonz:
         ipv4_address: 172.10.0.31
+    ports:
+      - "3001:3001"      
     environment:
       REACT_APP_API_BASE_URL: http://172.10.0.30:3000/v1
     depends_on:
@@ -269,10 +272,40 @@ services:
       - "8022:8021/tcp"
     volumes:
       - ./tmpAudio:/tmp
-      - ./freeswitch/conf:/usr/local/freeswitch/conf
     networks:
       jambonz:
         ipv4_address: 172.10.0.51
+
+  sbc-rtpengine-sidecar:
+    image: jambonz/rtpengine-sidecar:0.7.7
+    restart: always
+    environment:
+      NODE_ENV: production
+      DRACHTIO_HOST: 172.10.0.50
+      DRACHTIO_PORT: 9022
+      DRACHTIO_SECRET: cymru
+      JAMBONES_SBCS: 172.10.0.90
+      JAMBONES_REDIS_HOST: 172.10.0.3
+      JAMBONES_REDIS_PORT: 6379
+      DTMF_ONLY: true
+      RTPENGINE_DTMF_LOG_PORT: 22223
+      JAMBONES_LOGLEVEL: info
+      JAMBONES_TIME_SERIES_HOST: 172.10.0.4
+      JAMBONES_NETWORK_CIDR: 172.10.0.0/16
+      JAMBONES_CLUSTER_ID: jb
+      ENABLE_METRICS: 1
+      STATS_HOST: 172.10.0.5
+      STATS_PORT: 8125
+      STATS_TELEGRAF: 1
+    depends_on:
+      - mysql
+      - redis
+      - influxdb
+    networks:
+      jambonz:
+        ipv4_address: 172.10.0.36
+
+
 
   feature-server:
     image: jambonz/feature-server:latest
@@ -305,7 +338,7 @@ services:
       HTTP_PORT: 3000
       JAMBONES_SBCS: 172.10.0.90
       JAMBONES_FEATURE_SERVERS: 172.10.0.50:9022:cymru
-      JAMBONES_FREESWITCH: 172.10.0.51:8021:ClueCon
+      JAMBONES_FREESWITCH: 172.10.0.51:8021:JambonzR0ck$$
       JAMBONES_TIME_SERIES_HOST: 172.10.0.4
     depends_on:
       - mysql
@@ -319,5 +352,3 @@ services:
     networks:
       jambonz:
         ipv4_address: 172.10.0.60
-
-
