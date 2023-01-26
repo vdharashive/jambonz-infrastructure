@@ -4,11 +4,17 @@ AWSTemplateFormatVersion: "2010-09-09"
 Mappings:
   AWSRegion2AMI:
     us-east-1:
-      SbcSipAmi: ami-0d5d64b630b94e10b
-      SbcRtpAmi: ami-00d07f1a65fac121e
-      FsAmi: ami-0dd1b09d6d1d87715
-      WebserverAmi: ami-00b79f2518729a7d2
-      MonitoringServerAmi: ami-093dc7cfc55972dcc
+      SbcSipAmi: ami-0d9e6a27e776aaa00
+      SbcRtpAmi: ami-0ae189b5c1b56b0c8
+      FsAmi: ami-016ebaf56df8a84b0
+      WebserverAmi: ami-037ea894bad466cc1
+      MonitoringServerAmi: ami-05ee9b09996e2c1a0
+    eu-west-2:
+      SbcSipAmi: ami-0ae9968ecfef534df
+      SbcRtpAmi: ami-07940b2e454553039
+      FsAmi: ami-0cbfdbdaca620110b
+      WebserverAmi: ami-05a9d4ace683ad81b
+      MonitoringServerAmi: ami-0d4525c3bafefa46c
 
 Parameters:
   KeyName:
@@ -38,6 +44,8 @@ Parameters:
       - c5n.large
       - c5n.xlarge
       - c5n.2xlarge
+      - c5n.4xlarge
+      - c5n.18xlarge
       - c5n.metal    
   InstanceTypeSbcRtp:
     Description: "the EC2 instance type to use for the SBC Media server"
@@ -62,6 +70,8 @@ Parameters:
       - c5n.large
       - c5n.xlarge
       - c5n.2xlarge
+      - c5n.4xlarge
+      - c5n.18xlarge
       - c5n.metal    
   InstanceTypeFeatureServer:
     Description: "the EC2 instance type to use for the Feature Server"
@@ -86,6 +96,8 @@ Parameters:
       - c5n.large
       - c5n.xlarge
       - c5n.2xlarge
+      - c5n.4xlarge
+      - c5n.18xlarge
       - c5n.metal    
   InstanceTypeWebserver:
     Description: "the EC2 instance type to use for webServer"
@@ -110,6 +122,8 @@ Parameters:
       - c5n.large
       - c5n.xlarge
       - c5n.2xlarge
+      - c5n.4xlarge
+      - c5n.18xlarge
       - c5n.metal    
   InstanceTypeMonitoringServer:
     Description: "the EC2 instance type for the monitoring server"
@@ -134,6 +148,8 @@ Parameters:
       - c5n.large
       - c5n.xlarge
       - c5n.2xlarge
+      - c5n.4xlarge
+      - c5n.18xlarge
       - c5n.metal    
   ElastiCacheNodeType:
     Type: String
@@ -250,10 +266,22 @@ Parameters:
     Type: String
     Description: "DNS name you will point to the jambonz webserver(s)"
     Default: "yourdomain.com"
+  JaegerUsername:
+    Type: String
+    Description: "Basic Auth username for Jaeger"
+    Default: "admin"
+  JaegerPassword:
+    Type: String
+    Description: "Basic Auth password for Jaeger"
+    Default: "JambonzR0ck$"
   StatsSampleRate: 
     Type: Number
     Description: sampling rate for metrics, a number between 0 and 1 inclusive
     Default: 1
+  DbCachingTTS:
+    Type: Number
+    Description: Number of seconds to cache results from DB queries (0=no caching)
+    Default: 0
   EnableTracing: 
     Type: Number
     Description: enable opentelemetry application tracing?
@@ -261,6 +289,21 @@ Parameters:
       - 0
       - 1 
     Default: 1
+  CloudwatchLogRetention:
+    Description: "Number of days to retain cloudwatch logs"
+    Type: Number
+    Default: 3
+    AllowedValues:
+      - 1
+      - 3
+      - 5
+      - 7
+      - 14
+      - 30
+      - 60
+      - 90
+      - 120
+      - 150
 
 Resources:
 ###########################################
@@ -516,13 +559,18 @@ Resources:
         - IpProtocol: tcp
           FromPort: 5060
           ToPort: 5060
-          CidrIp:  !Ref VpcCIDR
+          CidrIp:  !Ref AllowedSipCidr
           Description: Allow sip (tcp) from Internet
         - IpProtocol: udp
           FromPort: 5060
           ToPort: 5060
           CidrIp:   !Ref AllowedSipCidr
           Description: Allow sip (udp) from Internet
+        - IpProtocol: tcp
+          Description: sip over wss
+          FromPort: 8443
+          ToPort: 8443
+          CidrIp: !Ref AllowedSipCidr
         - IpProtocol: tcp
           FromPort: 5061
           ToPort: 5061
@@ -580,9 +628,9 @@ Resources:
           Description: Allow access to prometheus scrape port from VPC
         - IpProtocol: udp
           FromPort: 22224
-          ToPort: 22225
+          ToPort: 22233
           CidrIp:  !Ref VpcCIDR
-          Description: Allow dtmf events from rtpengine-sidecard in the VPC
+          Description: Allow dtmf events from rtpengine-sidecar in the VPC
       SecurityGroupEgress:
         - IpProtocol: -1
           FromPort: 0
@@ -611,7 +659,7 @@ Resources:
           Description: Allow Freeswitch sip from VPC
         - IpProtocol: udp
           FromPort: 22222
-          ToPort: 22222
+          ToPort: 22223
           CidrIp:  !Ref VpcCIDR
           Description: Allow rtpengine ng protocol from VPC
         - IpProtocol: tcp
@@ -684,7 +732,12 @@ Resources:
           FromPort: 6832
           ToPort: 6832
           CidrIp:  !Ref VpcCIDR
-          Description: Jaeger collector
+          Description: Jaeger collector (udp)
+        - IpProtocol: tcp
+          FromPort: 14268
+          ToPort: 14268
+          CidrIp:  !Ref VpcCIDR
+          Description: Jaeger collector (http)
       SecurityGroupEgress:
         - IpProtocol: -1
           FromPort: 0
@@ -778,6 +831,14 @@ Resources:
         - Ref: MonitoringSecurityGroup
       KeyName: !Ref KeyName
       Monitoring: true
+      UserData:
+        Fn::Base64: 
+          Fn::Sub:
+            - |
+              #!/bin/bash -xe
+              # restart heplify-server
+              sudo systemctl restart heplify-server
+            - EnableTracing: !Ref EnableTracing
       Tags:
         -
           Key: Name
@@ -828,6 +889,27 @@ Resources:
           Principal:
             Service: [ec2.amazonaws.com]
           Action: ['sts:AssumeRole']
+      Path: /
+      Policies:
+        - PolicyName: root 
+          PolicyDocument: 
+            Version: "2012-10-17"
+            Statement: 
+              - Effect: Allow
+                Action: 
+                  - 'cloudwatch:PutMetricData'
+                  - 'ec2:DescribeVolumes'
+                  - 'ec2:DescribeTags'
+                  - 'logs:PutLogEvents'
+                  - 'logs:DescribeLogStreams'
+                  - 'logs:DescribeLogGroups'
+                  - 'logs:CreateLogStream'
+                  - 'logs:CreateLogGroup'
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - 'ssm:GetParameter'
+                Resource: 'arn:aws:ssm:*:*:parameter/AmazonCloudWatch-*'
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/AmazonSNSFullAccess
         - arn:aws:iam::aws:policy/AutoScalingReadOnlyAccess
@@ -890,6 +972,7 @@ Resources:
                     JAMBONES_LOGLEVEL: 'info',
                     JAMBONES_CLUSTER_ID: '${JAMBONES_CLUSTER_ID}',
                     AVOID_UDH: true,
+                    JAMBONES_MYSQL_REFRESH_TTL: ${DbCachingTTS},
                     JAMBONES_MYSQL_HOST: '${JAMBONES_MYSQL_HOST}',
                     JAMBONES_MYSQL_USER: '${JAMBONES_MYSQL_USER}',
                     JAMBONES_MYSQL_PASSWORD: '${JAMBONES_MYSQL_PASSWORD}',
@@ -919,12 +1002,12 @@ Resources:
                     DRACHTIO_HOST: '127.0.0.1',
                     DRACHTIO_PORT: 9022,
                     DRACHTIO_SECRET: 'cymru',
+                    JAMBONES_MYSQL_REFRESH_TTL: ${DbCachingTTS},
                     JAMBONES_MYSQL_HOST: '${JAMBONES_MYSQL_HOST}',
                     JAMBONES_MYSQL_USER: '${JAMBONES_MYSQL_USER}',
                     JAMBONES_MYSQL_PASSWORD: '${JAMBONES_MYSQL_PASSWORD}',
                     JAMBONES_MYSQL_DATABASE: 'jambones',
                     JAMBONES_MYSQL_CONNECTION_LIMIT: 10,
-                    JAMBONES_REDIS_HOST: '${JAMBONES_REDIS_HOST}',
                     JAMBONES_REDIS_HOST: '${JAMBONES_REDIS_HOST}',
                     JAMBONES_REDIS_PORT: 6379,
                     JAMBONES_TIME_SERIES_HOST: '${JAMBONES_TIME_SERIES_HOST}',
@@ -985,6 +1068,7 @@ Resources:
                     DRACHTIO_HOST: '127.0.0.1',
                     DRACHTIO_PORT: 9022,
                     DRACHTIO_SECRET: 'cymru',
+                    JAMBONES_MYSQL_REFRESH_TTL: ${DbCachingTTS},
                     JAMBONES_MYSQL_HOST: '${JAMBONES_MYSQL_HOST}',
                     JAMBONES_MYSQL_USER: '${JAMBONES_MYSQL_USER}',
                     JAMBONES_MYSQL_PASSWORD: '${JAMBONES_MYSQL_PASSWORD}',
@@ -1010,7 +1094,7 @@ Resources:
                   out_file: '/home/admin/.pm2/logs/jambonz-sbc-inbound.log',
                   err_file: '/home/admin/.pm2/logs/jambonz-sbc-inbound.log',
                   exec_mode: 'fork',
-                  instances: 2,
+                  instances: 'max',
                   autorestart: true,
                   watch: false,
                   max_memory_restart: '1G',
@@ -1027,6 +1111,7 @@ Resources:
                     HTTP_PORT_MAX: 3009,
                     AWS_SNS_PORT: 3010,
                     AWS_SNS_PORT_MAX: 3019,
+                    JAMBONES_MYSQL_REFRESH_TTL: ${DbCachingTTS},
                     JAMBONES_MYSQL_HOST: '${JAMBONES_MYSQL_HOST}',
                     JAMBONES_MYSQL_USER: '${JAMBONES_MYSQL_USER}',
                     JAMBONES_MYSQL_PASSWORD: '${JAMBONES_MYSQL_PASSWORD}',
@@ -1066,6 +1151,10 @@ Resources:
               sudo -u admin bash -c "pm2 save"
               sudo systemctl enable pm2-admin.service
 
+              echo "enabling cloudwatch"
+              sudo sed -i -e "s/retention_in_days\": 3/retention_in_days\": ${CloudwatchLogRetention}/g" /opt/aws/amazon-cloudwatch-agent/bin/config.json 
+              sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/bin/config.json
+
               echo "user data script completed"
             - VPC_CIDR: !Ref VpcCIDR
               AWS_REGION: !Ref AWS::Region
@@ -1078,6 +1167,9 @@ Resources:
               MONITORING_SERVER_IP: !GetAtt MonitoringServerEC2.PrivateIp
               AWS_SNS_TOPIC_ARN: !Ref SbcSipServerSNSTopic
               JAMBONES_TIME_SERIES_HOST: !GetAtt MonitoringServerEC2.PrivateIp
+              CloudwatchLogRetention: !Ref CloudwatchLogRetention
+              DbCachingTTS: !Ref DbCachingTTS
+
   SbcSipServerPlacementGroup:
     Type: AWS::EC2::PlacementGroup
     Properties:
@@ -1090,7 +1182,7 @@ Resources:
       LaunchConfigurationName: !Ref SbcSipConfig
       MinSize: 1
       MaxSize: 4
-      DesiredCapacity: 2
+      DesiredCapacity: 1
       TerminationPolicies:
        - OldestInstance
       VPCZoneIdentifier: 
@@ -1153,6 +1245,27 @@ Resources:
           Principal:
             Service: [ec2.amazonaws.com]
           Action: ['sts:AssumeRole']
+      Path: /
+      Policies:
+        - PolicyName: root 
+          PolicyDocument: 
+            Version: "2012-10-17"
+            Statement: 
+              - Effect: Allow
+                Action: 
+                  - 'cloudwatch:PutMetricData'
+                  - 'ec2:DescribeVolumes'
+                  - 'ec2:DescribeTags'
+                  - 'logs:PutLogEvents'
+                  - 'logs:DescribeLogStreams'
+                  - 'logs:DescribeLogGroups'
+                  - 'logs:CreateLogStream'
+                  - 'logs:CreateLogGroup'
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - 'ssm:GetParameter'
+                Resource: 'arn:aws:ssm:*:*:parameter/AmazonCloudWatch-*'
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/AmazonSNSFullAccess
         - arn:aws:iam::aws:policy/AutoScalingReadOnlyAccess
@@ -1198,7 +1311,7 @@ Resources:
                   out_file: '/home/admin/.pm2/logs/jambonz-feature-server.log',
                   err_file: '/home/admin/.pm2/logs/jambonz-feature-server.log',
                   exec_mode: 'fork',
-                  instances: 2,
+                  instances: 'max',
                   autorestart: true,
                   watch: false,
                   max_memory_restart: '1G',
@@ -1211,10 +1324,13 @@ Resources:
                     STATS_TELEGRAF: 1,
                     STATS_SAMPLE_RATE: ${JAMBONES_SAMPLE_RATE},
                     JAMBONES_OTEL_ENABLED: ${OTEL_TRACING},
-                    OTEL_EXPORTER_JAEGER_AGENT_HOST: '${MONITORING_SERVER_IP}',
+                    OTEL_EXPORTER_JAEGER_ENDPOINT: 'http://${MONITORING_SERVER_IP}:14268/api/traces',
+                    OTEL_EXPORTER_OTLP_METRICS_INSECURE: 1,
+                    OTEL_EXPORTER_JAEGER_GRPC_INSECURE: 1,
                     AWS_SNS_TOPIC_ARM: '${AWS_SNS_TOPIC_ARN}',
                     AWS_REGION: '${AWS_REGION}',
                     JAMBONES_NETWORK_CIDR: '${VPC_CIDR}',
+                    JAMBONES_MYSQL_REFRESH_TTL: ${DbCachingTTS},
                     JAMBONES_MYSQL_HOST: '${JAMBONES_MYSQL_HOST}',
                     JAMBONES_MYSQL_USER: '${JAMBONES_MYSQL_USER}',
                     JAMBONES_MYSQL_PASSWORD: '${JAMBONES_MYSQL_PASSWORD}',
@@ -1222,7 +1338,7 @@ Resources:
                     JAMBONES_MYSQL_CONNECTION_LIMIT: 10,
                     JAMBONES_REDIS_HOST: '${JAMBONES_REDIS_HOST}',
                     JAMBONES_REDIS_PORT: 6379,
-                    JAMBONES_LOGLEVEL: 'debug',
+                    JAMBONES_LOGLEVEL: 'info',
                     JAMBONES_TIME_SERIES_HOST: '${JAMBONES_TIME_SERIES_HOST}',
                     HTTP_PORT: 3000,
                     HTTP_PORT_MAX: 3009,
@@ -1250,7 +1366,11 @@ Resources:
               # configure telegraph to send to the monitoring server
               sudo sed -i -e "s/influxdb:8086/${MONITORING_SERVER_IP}:8086/g"  /etc/telegraf/telegraf.conf
               sudo systemctl restart telegraf
-            
+
+              echo "enabling cloudwatch"
+              sudo sed -i -e "s/retention_in_days\": 3/retention_in_days\": ${CloudwatchLogRetention}/g" /opt/aws/amazon-cloudwatch-agent/bin/config.json 
+              sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/bin/config.json
+
               echo "user data script completed"
             - VPC_CIDR: !Ref VpcCIDR
               JAMBONES_MYSQL_HOST: !GetAtt DatabaseCluster.Endpoint.Address
@@ -1265,6 +1385,8 @@ Resources:
               MONITORING_SERVER_IP: !GetAtt MonitoringServerEC2.PrivateIp
               JAMBONES_TIME_SERIES_HOST: !GetAtt MonitoringServerEC2.PrivateIp
               JWT_SECRET: !Ref EncryptionSecret
+              CloudwatchLogRetention: !Ref CloudwatchLogRetention
+              DbCachingTTS: !Ref DbCachingTTS
 
   FeatureServerPlacementGroup:
     Type: AWS::EC2::PlacementGroup
@@ -1337,11 +1459,32 @@ Resources:
           Principal:
             Service: [ec2.amazonaws.com]
           Action: ['sts:AssumeRole']
+      Path: /
+      Policies:
+        - PolicyName: root 
+          PolicyDocument: 
+            Version: "2012-10-17"
+            Statement: 
+              - Effect: Allow
+                Action: 
+                  - 'cloudwatch:PutMetricData'
+                  - 'ec2:DescribeVolumes'
+                  - 'ec2:DescribeTags'
+                  - 'logs:PutLogEvents'
+                  - 'logs:DescribeLogStreams'
+                  - 'logs:DescribeLogGroups'
+                  - 'logs:CreateLogStream'
+                  - 'logs:CreateLogGroup'
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - 'ssm:GetParameter'
+                Resource: 'arn:aws:ssm:*:*:parameter/AmazonCloudWatch-*'
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/AmazonSNSFullAccess
         - arn:aws:iam::aws:policy/AutoScalingReadOnlyAccess
 
-  # --- Feature server EC2 Role Instance profile
+  # --- SBC RTP EC2 Role Instance profile
   SbcRTPServerInstanceProfile:
     Type: 'AWS::IAM::InstanceProfile'
     Properties:
@@ -1417,6 +1560,10 @@ Resources:
               sudo sed -i -e "s/--delete-delay 0/--delete-delay 0 --homer=${MONITORING_SERVER_IP}:9060 --homer-protocol=udp --homer-id=11/g"  /etc/systemd/system/rtpengine.service
               sudo systemctl daemon-reload
               sudo sytemctl restart rtpengine
+
+              echo "enabling cloudwatch"
+              sudo sed -i -e "s/retention_in_days\": 3/retention_in_days\": ${CloudwatchLogRetention}/g" /opt/aws/amazon-cloudwatch-agent/bin/config.json 
+              sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/bin/config.json
             - VPC_CIDR: !Ref VpcCIDR
               AWS_REGION: !Ref AWS::Region
               JAMBONES_MYSQL_HOST: !GetAtt DatabaseCluster.Endpoint.Address
@@ -1427,6 +1574,7 @@ Resources:
               JAMBONES_REDIS_HOST: !GetAtt ElastiCacheCluster.RedisEndpoint.Address
               AWS_SNS_TOPIC_ARN: !Ref SbcRTPServerSNSTopic
               MONITORING_SERVER_IP: !GetAtt MonitoringServerEC2.PrivateIp
+              CloudwatchLogRetention: !Ref CloudwatchLogRetention
 
   SbcRTPServerPlacementGroup:
     Type: AWS::EC2::PlacementGroup
@@ -1512,6 +1660,27 @@ Resources:
           Principal:
             Service: [ec2.amazonaws.com]
           Action: ['sts:AssumeRole']
+      Path: /
+      Policies:
+        - PolicyName: root 
+          PolicyDocument: 
+            Version: "2012-10-17"
+            Statement: 
+              - Effect: Allow
+                Action: 
+                  - 'cloudwatch:PutMetricData'
+                  - 'ec2:DescribeVolumes'
+                  - 'ec2:DescribeTags'
+                  - 'logs:PutLogEvents'
+                  - 'logs:DescribeLogStreams'
+                  - 'logs:DescribeLogGroups'
+                  - 'logs:CreateLogStream'
+                  - 'logs:CreateLogGroup'
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - 'ssm:GetParameter'
+                Resource: 'arn:aws:ssm:*:*:parameter/AmazonCloudWatch-*'
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/AmazonEC2FullAccess
         - arn:aws:iam::aws:policy/AutoScalingReadOnlyAccess
@@ -1561,7 +1730,7 @@ Resources:
                 JAMBONES_MYSQL_HOST=${JAMBONES_MYSQL_HOST} JAMBONES_MYSQL_USER=admin JAMBONES_MYSQL_PASSWORD=${JAMBONES_MYSQL_PASSWORD} JAMBONES_MYSQL_DATABASE=jambones /home/admin/apps/jambonz-api-server/db/reset_admin_password.js
               fi
               # jambonz webapp
-              echo "building webapp.."
+              echo "configuring webapp.."
               echo "REACT_APP_API_BASE_URL=http://${URLPortal}/api/v1" > /home/admin/apps/jambonz-webapp/.env
               echo "REACT_APP_MOBILE_BREAKPOINT=767px" >> /home/admin/apps/jambonz-webapp/.env
               echo "REACT_APP_ENABLE_SUBSPACE=1" >> /home/admin/apps/jambonz-webapp/.env
@@ -1588,6 +1757,7 @@ Resources:
                   max_memory_restart: '1G',
                   env: {
                     NODE_ENV: 'production',
+                    JAMBONES_MYSQL_REFRESH_TTL: ${DbCachingTTS},
                     JAMBONES_MYSQL_HOST: '${JAMBONES_MYSQL_HOST}',
                     JAMBONES_MYSQL_USER: '${JAMBONES_MYSQL_USER}',
                     JAMBONES_MYSQL_PASSWORD: '${JAMBONES_MYSQL_PASSWORD}',
@@ -1642,7 +1812,10 @@ Resources:
               EOF
             
               echo "finished writing config file"
-            
+
+              echo "building jambonz-api-server"
+              sudo -u admin bash -c "cd /home/admin/apps/jambonz-api-server && npm ci"
+
               sudo -u admin bash -c "pm2 start /home/admin/apps/ecosystem.config.js"
               sudo env PATH=$PATH:/usr/bin /usr/lib/node_modules/pm2/bin/pm2 startup systemd -u admin --hp /home/admin
               sudo -u admin bash -c "pm2 save"
@@ -1653,10 +1826,14 @@ Resources:
               sudo systemctl restart telegraf
             
               # configure nginx for homer and grafana on the monitoring server
+              
+              #Add BasicAuth password for Jaeger
+              sudo htpasswd -b -c /etc/nginx/.htpasswd ${JaegerUsername} ${JaegerPassword}
+              
               sudo cat << EOF > /etc/nginx/sites-available/default 
               server {
                   listen 80;
-                  server_name _;
+                  server_name ${URLPortal};
                   location /api/ {
                       rewrite ^/api/(.*)$ /\$1 break;
                       proxy_pass http://localhost:3000;
@@ -1664,6 +1841,14 @@ Resources:
                   }
                   location / {
                       proxy_pass http://localhost:3001;
+                      proxy_set_header Host \$host;
+                  }
+              }
+              server {
+                  listen 80;
+                  server_name api.${URLPortal};
+                  location / {
+                      proxy_pass http://localhost:3000;
                       proxy_set_header Host \$host;
                   }
               }
@@ -1701,11 +1886,17 @@ Resources:
                   proxy_set_header Connection 'upgrade';
                   proxy_set_header Host \$host;
                   proxy_cache_bypass \$http_upgrade;
+                  auth_basic "Secured Endpoint";
+                  auth_basic_user_file /etc/nginx/.htpasswd;
                 }
               }
               EOF
             
               sudo systemctl restart nginx
+
+              echo "enabling cloudwatch"
+              sudo sed -i -e "s/retention_in_days\": 3/retention_in_days\": ${CloudwatchLogRetention}/g" /opt/aws/amazon-cloudwatch-agent/bin/config.json 
+              sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/bin/config.json
             
               echo "webserver user data script completed"
             - VPC_CIDR: !Ref VpcCIDR
@@ -1720,6 +1911,10 @@ Resources:
               JAMBONES_TIME_SERIES_HOST: !GetAtt MonitoringServerEC2.PrivateIp
               JWT_SECRET: !Ref EncryptionSecret
               URLPortal: !Ref URLPortal
+              JaegerUsername: !Ref JaegerUsername
+              JaegerPassword: !Ref JaegerPassword
+              CloudwatchLogRetention: !Ref CloudwatchLogRetention
+              DbCachingTTS: !Ref DbCachingTTS
 
   WebServerPlacementGroup:
     Type: AWS::EC2::PlacementGroup

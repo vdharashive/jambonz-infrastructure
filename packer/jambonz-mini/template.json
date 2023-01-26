@@ -4,8 +4,8 @@
     "ssh_username": "admin",
     "ami_description": "jambonz all-in-one AMI", 
     "instance_type": "t2.xlarge",
-    "drachtio_version": "v0.8.18",
-    "jambonz_version": "v0.7.7-14",
+    "drachtio_version": "v0.8.20",
+    "jambonz_version": "v0.8.0-rc4",
     "jambonz_user": "admin",
     "jambonz_password": "JambonzR0ck$",
     "install_telegraf": "yes",
@@ -14,9 +14,10 @@
     "install_influxdb":  "yes",
     "install_homer":  "yes",
     "install_jaeger":  "yes",
+    "install_cloudwatch":  "yes",
     "install_nodered":  "no",
     "influxdb_ip":  "127.0.0.1",
-    "rtp_engine_version": "mr11.1.1.1",
+    "rtp_engine_version": "mr11.1.1.2",
     "rtp_engine_min_port": "40000",
     "rtp_engine_max_port": "60000"
   },
@@ -91,6 +92,11 @@
     {
       "type": "shell",
       "script": "scripts/install_os_tuning.sh"
+    },
+    {
+      "type": "shell",
+      "execute_command": "chmod +x {{ .Path }}; sudo '{{ .Path }}' {{user `install_cloudwatch`}}",
+      "script": "scripts/install_cloudwatch.sh"
     },
     {
       "type": "shell",
